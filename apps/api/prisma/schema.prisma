@@ -1,0 +1,338 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  ADMIN
+  VIEWER
+}
+
+enum UserStatus {
+  ACTIVE
+  DISABLED
+}
+
+enum ProviderType {
+  OPENAI
+  ANTHROPIC
+  GEMINI
+  AZURE_OPENAI
+}
+
+enum ProviderHealth {
+  UNKNOWN
+  HEALTHY
+  DEGRADED
+  DOWN
+}
+
+enum KeyStatus {
+  ACTIVE
+  DISABLED
+  REVOKED
+}
+
+enum SensitiveRuleType {
+  KEYWORD
+  REGEX
+  BUILTIN
+}
+
+enum SensitiveAction {
+  BLOCK
+  MASK
+  LOG
+}
+
+enum SensitiveDirection {
+  INPUT
+  OUTPUT
+  BOTH
+}
+
+enum RequestStatus {
+  SUCCESS
+  ERROR
+  BLOCKED
+  CANCELLED
+}
+
+enum InterceptDirection {
+  INPUT
+  OUTPUT
+}
+
+model AdminUser {
+  id           String        @id @default(cuid())
+  username     String        @unique @db.VarChar(64)
+  passwordHash String        @db.VarChar(255)
+  displayName  String?       @db.VarChar(100)
+  role         UserRole      @default(VIEWER)
+  status       UserStatus    @default(ACTIVE)
+  lastLoginAt  DateTime?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  refreshTokens RefreshToken[]
+}
+
+model RefreshToken {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique @db.VarChar(64)
+  expiresAt DateTime
+  revokedAt DateTime?
+  ip        String?   @db.VarChar(64)
+  userAgent String?   @db.Text
+  createdAt DateTime  @default(now())
+  user      AdminUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model Provider {
+  id              String         @id @default(cuid())
+  name            String         @db.VarChar(100)
+  type            ProviderType
+  baseUrl         String         @db.VarChar(500)
+  apiKeyCipher    String?        @db.Text
+  apiKeyIv        String?        @db.VarChar(100)
+  apiKeyTag       String?        @db.VarChar(100)
+  keyVersion      Int            @default(1)
+  headers         Json?
+  timeoutMs       Int            @default(120000)
+  maxRetries      Int            @default(1)
+  priority        Int            @default(10)
+  weight          Int            @default(100)
+  enabled         Boolean        @default(true)
+  health          ProviderHealth @default(UNKNOWN)
+  lastCheckedAt   DateTime?
+  lastError       String?        @db.Text
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  models          ProviderModel[]
+
+  @@index([enabled, priority])
+}
+
+model ProviderModel {
+  id            String      @id @default(cuid())
+  providerId    String
+  upstreamModel String      @db.VarChar(200)
+  displayName   String?     @db.VarChar(200)
+  capabilities  Json?
+  contextWindow Int?
+  enabled       Boolean     @default(true)
+  discoveredAt  DateTime    @default(now())
+  provider      Provider    @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  routes        ModelRoute[]
+
+  @@unique([providerId, upstreamModel])
+  @@index([providerId])
+}
+
+model Model {
+  id            String       @id @default(cuid())
+  name          String       @unique @db.VarChar(200)
+  displayName   String       @db.VarChar(200)
+  description   String?      @db.Text
+  capabilities  Json?
+  contextWindow Int?
+  inputPrice    Decimal?     @db.Decimal(12, 6)
+  outputPrice   Decimal?     @db.Decimal(12, 6)
+  enabled       Boolean      @default(true)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  routes        ModelRoute[]
+  keyModels     ApiKeyModel[]
+
+  @@index([enabled])
+}
+
+model ModelRoute {
+  id              String        @id @default(cuid())
+  modelId         String
+  providerModelId String
+  priority        Int           @default(10)
+  weight          Int           @default(100)
+  enabled         Boolean       @default(true)
+  createdAt       DateTime      @default(now())
+  model           Model         @relation(fields: [modelId], references: [id], onDelete: Cascade)
+  providerModel   ProviderModel @relation(fields: [providerModelId], references: [id], onDelete: Cascade)
+
+  @@unique([modelId, providerModelId])
+  @@index([modelId, priority])
+}
+
+model ApiKey {
+  id                 String           @id @default(cuid())
+  name               String           @db.VarChar(100)
+  keyPrefix          String           @db.VarChar(24)
+  keyHash            String           @unique @db.VarChar(64)
+  last4              String           @db.VarChar(8)
+  owner              String?          @db.VarChar(100)
+  note               String?          @db.Text
+  status             KeyStatus        @default(ACTIVE)
+  expiresAt          DateTime?
+  quotaRequests      BigInt?
+  quotaTokens        BigInt?
+  quotaCost          Decimal?         @db.Decimal(14, 6)
+  usedRequests       BigInt           @default(0)
+  usedTokens         BigInt           @default(0)
+  usedCost           Decimal          @default(0) @db.Decimal(14, 6)
+  rpmLimit           Int?
+  tpmLimit           Int?
+  concurrencyLimit   Int?
+  dailyRequestLimit  Int?
+  monthlyTokenLimit  BigInt?
+  monthlyCostLimit   Decimal?         @db.Decimal(14, 6)
+  ipAllowlist        Json?
+  sensitivePolicyId  String?
+  logBody            Boolean          @default(false)
+  lastUsedAt         DateTime?
+  revokedAt          DateTime?
+  createdById        String?
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+  sensitivePolicy    SensitivePolicy? @relation(fields: [sensitivePolicyId], references: [id], onDelete: SetNull)
+  keyModels          ApiKeyModel[]
+
+  @@index([status])
+  @@index([sensitivePolicyId])
+}
+
+model ApiKeyModel {
+  apiKeyId String
+  modelId  String
+  apiKey   ApiKey @relation(fields: [apiKeyId], references: [id], onDelete: Cascade)
+  model    Model  @relation(fields: [modelId], references: [id], onDelete: Cascade)
+
+  @@id([apiKeyId, modelId])
+  @@index([modelId])
+}
+
+model SensitivePolicy {
+  id          String               @id @default(cuid())
+  name        String               @unique @db.VarChar(100)
+  description String?              @db.Text
+  isDefault   Boolean              @default(false)
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
+  rules       SensitivePolicyRule[]
+  keys        ApiKey[]
+}
+
+model SensitiveRule {
+  id          String                @id @default(cuid())
+  name        String                @db.VarChar(100)
+  category    String                @db.VarChar(50)
+  type        SensitiveRuleType
+  pattern     String?               @db.Text
+  action      SensitiveAction       @default(BLOCK)
+  direction   SensitiveDirection    @default(BOTH)
+  severity    Int                   @default(50)
+  enabled     Boolean               @default(true)
+  priority    Int                   @default(10)
+  replacement String?               @db.VarChar(50)
+  isBuiltin   Boolean               @default(false)
+  builtinKey  String?               @unique @db.VarChar(80)
+  createdAt   DateTime              @default(now())
+  updatedAt   DateTime              @updatedAt
+  policies    SensitivePolicyRule[]
+
+  @@index([enabled, direction])
+}
+
+model SensitivePolicyRule {
+  policyId String
+  ruleId   String
+  policy   SensitivePolicy @relation(fields: [policyId], references: [id], onDelete: Cascade)
+  rule     SensitiveRule   @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+
+  @@id([policyId, ruleId])
+  @@index([ruleId])
+}
+
+model RequestLog {
+  id                BigInt             @id @default(autoincrement())
+  requestId         String             @unique @db.VarChar(100)
+  keyId             String?            @db.VarChar(64)
+  keyName           String?            @db.VarChar(100)
+  modelRequested    String             @db.VarChar(200)
+  providerId        String?            @db.VarChar(64)
+  providerName      String?            @db.VarChar(100)
+  upstreamModel     String?            @db.VarChar(200)
+  endpoint          String             @db.VarChar(100)
+  stream            Boolean            @default(false)
+  status            RequestStatus      @default(SUCCESS)
+  httpStatus        Int                @default(200)
+  errorCode         String?            @db.VarChar(100)
+  errorMessage      String?            @db.Text
+  latencyMs         Int                @default(0)
+  ttftMs            Int?
+  inputTokens       Int?
+  outputTokens      Int?
+  totalTokens       Int?
+  usageEstimated    Boolean            @default(false)
+  costEstimate      Decimal?           @db.Decimal(14, 8)
+  clientIp          String?            @db.VarChar(64)
+  userAgent         String?            @db.Text
+  requestBytes      Int?
+  responseBytes     Int?
+  retryCount        Int                @default(0)
+  attempts          Json?
+  intercepted       Boolean            @default(false)
+  interceptDirection InterceptDirection?
+  interceptAction   SensitiveAction?
+  interceptRuleIds  Json?
+  interceptSummary  String?            @db.Text
+  upstreamRequestId String?            @db.VarChar(200)
+  traceId           String?            @db.VarChar(100)
+  source            String?            @db.VarChar(50)
+  createdAt         DateTime           @default(now())
+
+  @@index([createdAt])
+  @@index([keyId, createdAt])
+  @@index([modelRequested, createdAt])
+  @@index([status, createdAt])
+  @@index([intercepted, createdAt])
+}
+
+model RequestLogBody {
+  id           BigInt     @id @default(autoincrement())
+  logId        BigInt     @unique
+  requestBody  Json?
+  responseBody Json?
+  redacted     Boolean    @default(true)
+  expiresAt    DateTime?
+  createdAt    DateTime   @default(now())
+
+  @@index([expiresAt])
+}
+
+model AuditLog {
+  id         BigInt   @id @default(autoincrement())
+  adminId    String?  @db.VarChar(64)
+  username   String?  @db.VarChar(64)
+  action     String   @db.VarChar(100)
+  targetType String?  @db.VarChar(80)
+  targetId   String?  @db.VarChar(100)
+  before     Json?
+  after      Json?
+  ip         String?  @db.VarChar(64)
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([adminId, createdAt])
+}
+
+model Setting {
+  key       String   @id @db.VarChar(100)
+  value     Json
+  updatedAt DateTime @updatedAt
+}

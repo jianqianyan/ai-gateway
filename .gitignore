@@ -1,0 +1,12 @@
+node_modules/
+dist/
+coverage/
+.env
+.env.local
+.demo-key.txt
+*.log
+.DS_Store
+apps/web/dist/
+apps/api/prisma/*.db
+test-results/
+playwright-report/
